@@ -103,7 +103,7 @@ class KatabumpAutoRenew:
         v_env = os.getenv('CHROME_VERSION')
         v_main = int(v_env) if v_env and v_env.isdigit() else None
         try:
-            self.driver = uc.Chrome(options=chrome_options, headless=HEADLESS, v_main)
+            self.driver = uc.Chrome(options=chrome_options, headless=HEADLESS, version_main=v_main)
         except Exception as e:
             self.driver = uc.Chrome(options=chrome_options, headless=HEADLESS)
         self.driver.set_window_size(1280, 720)
