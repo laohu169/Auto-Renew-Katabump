@@ -6,49 +6,72 @@ on:
   workflow_dispatch:  # 允许手动触发
 
 jobs:
-  auto_renew_katabump:
-    runs-on: ubuntu-22.04
-
-    env:
-      ACCOUNTS: ${{ secrets.ACCOUNTS }}
-      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      CHAT_ID: ${{ secrets.CHAT_ID }}
-
+  renew:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install Dependencies
+      run: |
+        pip install seleniumbase
+        
+    - name: Setup Chrome
+      run: |
+        seleniumbase install chromedriver
+        
+    - name: Setup Proxy Tunnel (Gost)
+      env:
+        PROXY_URL: ${{ secrets.PROXY }}
+      run: |
+        wget -q https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
+        gunzip gost-linux-amd64-2.11.5.gz
+        chmod +x gost-linux-amd64-2.11.5
+        
+        nohup ./gost-linux-amd64-2.11.5 -L :1080 -F "${PROXY_URL}" > gost.log 2>&1 &
+        sleep 5
+        curl -s --connect-timeout 10 -x socks5://127.0.0.1:1080 https://api.ipify.org && echo " ✅ Tunnel OK"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: Run Task (Strongest Mode)
+      env:
+        KATABUMP_TARGET_URL: ${{ secrets.KATABUMP_TARGET_URL }}
+        KATABUMP_USERNAME: ${{ secrets.KATABUMP_USERNAME }}
+        KATABUMP_PASSWORD: ${{ secrets.KATABUMP_PASSWORD }}
+        PROXY: socks5://127.0.0.1:1080
+      run: |
+        xvfb-run -a python katabump_renewal.py
+        
+    - name: Upload Debug Screenshots
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: katabump-screenshots
+        path: artifacts/
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          sudo apt-get update && sudo apt-get install -y xvfb
-          
-      - name: Get Chromium Version
-        id: get_version
-        run: |
-          CHROME_VERSION=$(chromium-browser --version 2>/dev/null | grep -oE 'Chromium\s[0-9]+' | grep -oE '[0-9]+')
-          if [ -z "$CHROME_VERSION" ]; then
-            CHROME_VERSION=$(google-chrome --version 2>/dev/null | grep -oE 'Chrome\s[0-9]+' | grep -oE '[0-9]+')
+    - name: Send Telegram Notification
+      if: always()
+      run: |
+        STATUS="${{ job.status }}"
+        if [ "$STATUS" = "success" ]; then
+          if [ -f renewal_result.txt ]; then
+              MESSAGE=$(cat renewal_result.txt)
+          else
+              MESSAGE="✅ Katabump 续期成功"
           fi
-          if [ -z "$CHROME_VERSION" ]; then
-            echo "⚠️ 无法自动检测浏览器版本，使用最新稳定版本。"
-          CHROME_VERSION="144"
-          fi
-          echo "Detected Chrome/Chromium Major Version: $CHROME_VERSION"
-          echo "CHROME_VERSION=$CHROME_VERSION" >> $GITHUB_ENV
+        else
+          MESSAGE="❌ Katabump 续期失败"
+        fi
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
+          -d chat_id="${{ secrets.TG_CHAT_ID }}" \
+          -d text="$MESSAGE"
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendPhoto" \
+          -F chat_id="${{ secrets.TG_CHAT_ID }}" \
+          -F photo=@artifacts/final_page.png \
+          -F caption="Katabump Final State" || true
 
-      - name: Start X Virtual Frame Buffer (Xvfb)
-        # 在后台启动 Xvfb，创建一个虚拟屏幕 :99
-        run: Xvfb :99 -ac &
-
-      - name: Run Script in Stealth Mode (via Xvfb)
-        env:
-          DISPLAY: ':99'
-          HEADLESS: 'false'
-        run: |
-          python renew_katabump.py
